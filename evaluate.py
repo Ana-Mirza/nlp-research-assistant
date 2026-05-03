@@ -83,6 +83,8 @@ TEST_QUERIES = [
      "category": "out_of_domain", "expected_empty": True},
     {"query": "the impact of monetary policy on housing prices in 2024", "keywords": [],
      "category": "out_of_domain", "expected_empty": True},
+    {"query": "I want to research how to build a car", "keywords": [],
+     "category": "out_of_domain", "expected_empty": True},
     # --- Reliability check (1) ---
     {"query": "continual learning without catastrophic forgetting", "keywords": ["continual", "forgetting"],
      "category": "core_ml"},
@@ -166,7 +168,9 @@ def llm_judge_score(query, answer, papers):
     )
     JUDGE_MODEL = "qwen3:8b"
     resp = generate(prompt, model=JUDGE_MODEL, temperature=0.0)
-    match = re.search(r'[1-5]', resp)
+    # Strip qwen3's <think>...</think> reasoning block before parsing the score
+    clean = re.sub(r'<think>.*?</think>', '', resp, flags=re.DOTALL).strip()
+    match = re.search(r'[1-5]', clean)
     return int(match.group()) if match else 3
 
 
