@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+*.pyo
+chroma_db/
+data/
+.sisyphus/
+*.pkl
+*.parquet
+.DS_Store
+*.egg-info/
+dist/
+build/
+.env
+venv/
+.venv/

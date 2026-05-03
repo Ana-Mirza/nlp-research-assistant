@@ -1,0 +1,10 @@
+streamlit==1.45.1
+chromadb==1.0.7
+sentence-transformers==4.1.0
+rank_bm25==0.2.2
+requests==2.32.3
+datasets==3.6.0
+ragas==0.2.15
+pymupdf==1.25.5
+transformers==4.51.3
+langdetect==1.0.9
