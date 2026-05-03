@@ -22,15 +22,19 @@ def _get_collection():
         from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
         ef = SentenceTransformerEmbeddingFunction(model_name=EMBEDDING_MODEL)
         client = chromadb.PersistentClient(path=CHROMA_DB_PATH)
-        _collection = client.get_collection(name=COLLECTION_NAME, embedding_function=ef)
+        try:
+            _collection = client.get_collection(name=COLLECTION_NAME, embedding_function=ef)
+        except ValueError:
+            # Embeddings were pre-computed; get collection without EF and embed queries manually
+            _collection = client.get_collection(name=COLLECTION_NAME)
     return _collection
 
 
 def _get_bm25():
     global _bm25, _bm25_mapping
     if _bm25 is None:
-        with open(os.path.join(DATA_DIR, "bm25_index.pkl"), "rb") as f:
-            _bm25 = pickle.load(f)
+        import bm25s
+        _bm25 = bm25s.BM25.load(os.path.join(DATA_DIR, "bm25s_index"), load_corpus=False)
         with open(os.path.join(DATA_DIR, "bm25_mapping.pkl"), "rb") as f:
             _bm25_mapping = pickle.load(f)
     return _bm25, _bm25_mapping
@@ -53,20 +57,23 @@ def _parse_document(doc):
 def _dense_retrieval(query):
     """Return list of (arxiv_id, rank) from ChromaDB."""
     collection = _get_collection()
-    results = collection.query(query_texts=[query], n_results=TOP_K_DENSE, include=["documents", "metadatas"])
+    embedder = _get_embedder()
+    q_emb = embedder.encode(query).tolist()
+    results = collection.query(query_embeddings=[q_emb], n_results=TOP_K_DENSE, include=["documents", "metadatas"])
     return [(aid, rank + 1) for rank, aid in enumerate(results["ids"][0])]
 
 
 def _sparse_retrieval(query):
     """Return list of (arxiv_id, rank) from BM25."""
+    import bm25s
     bm25, mapping = _get_bm25()
-    scores = bm25.get_scores(query.lower().split())
-    top_indices = scores.argsort()[-TOP_K_SPARSE:][::-1]
-    results = []
-    for rank, idx in enumerate(top_indices):
-        if scores[idx] > 0:
-            results.append((mapping[int(idx)], rank + 1))
-    return results
+    query_tokens = bm25s.tokenize(query.lower())
+    results_ids, scores = bm25.retrieve(query_tokens, k=TOP_K_SPARSE)
+    out = []
+    for rank, (idx, score) in enumerate(zip(results_ids[0], scores[0])):
+        if score > 0:
+            out.append((mapping[int(idx)], rank + 1))
+    return out
 
 
 def _reciprocal_rank_fusion(dense_results, sparse_results):
@@ -81,8 +88,12 @@ def _reciprocal_rank_fusion(dense_results, sparse_results):
 
 def retrieve(query: str, top_k: int = 5) -> list[dict]:
     """Retrieve top-k papers using hybrid retrieval + cross-encoder re-ranking."""
-    dense_results = _dense_retrieval(query)
-    sparse_results = _sparse_retrieval(query)
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        dense_future = ex.submit(_dense_retrieval, query)
+        sparse_future = ex.submit(_sparse_retrieval, query)
+        dense_results = dense_future.result()
+        sparse_results = sparse_future.result()
     fused = _reciprocal_rank_fusion(dense_results, sparse_results)
 
     # Fetch full paper info from ChromaDB for fused candidates

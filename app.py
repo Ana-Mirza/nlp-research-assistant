@@ -7,6 +7,18 @@ from config import AVAILABLE_MODELS, DEFAULT_MODEL
 
 st.set_page_config(page_title="Academic Research Assistant", layout="wide", page_icon="📚")
 
+# Preload all models on startup so first query is fast
+@st.cache_resource
+def _preload():
+    from retrieval import _get_collection, _get_bm25, _get_reranker, _get_embedder
+    _get_collection()
+    _get_bm25()
+    _get_reranker()
+    _get_embedder()
+
+with st.spinner("Loading models..."):
+    _preload()
+
 # --- Sidebar ---
 with st.sidebar:
     st.header("⚙️ Settings")
@@ -16,7 +28,7 @@ with st.sidebar:
     st.markdown("---")
     st.markdown(
         "**Academic Research Assistant** uses hybrid retrieval (dense + sparse + re-ranking) "
-        "over 50K arXiv papers and an LLM to analyse research directions."
+        "over 388K arXiv papers and an LLM to analyse research directions."
     )
 
 # --- Main area ---
@@ -50,7 +62,7 @@ if "result" in st.session_state:
     papers = result.get("papers", [])
     answer = result.get("answer", "")
 
-    if not papers and "No relevant" in answer:
+    if not papers:
         st.info(answer)
     else:
         col_analysis, col_papers = st.columns([3, 2])
@@ -59,11 +71,18 @@ if "result" in st.session_state:
             st.subheader("📝 Analysis")
             st.markdown(answer)
 
-            # Classification section
-            classification = result.get("classification", "")
-            if classification:
+            # Classification section — on-demand to keep main query fast
+            if st.button("🏷️ Classify Papers by Methodology"):
+                with st.spinner("Classifying papers..."):
+                    from rag import classify_papers
+                    from translate import translate_to_english, translate_from_english
+                    english_query, source_lang = translate_to_english(result.get("query", ""))
+                    classification = classify_papers(papers, english_query, model=result.get("model"))
+                    classification = translate_from_english(classification, source_lang)
+                    st.session_state["classification"] = classification
+            if "classification" in st.session_state:
                 st.subheader("🏷️ Paper Classification by Methodology")
-                st.markdown(classification)
+                st.markdown(st.session_state["classification"])
 
         with col_papers:
             st.subheader(f"📄 Retrieved Papers ({len(papers)})")

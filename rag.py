@@ -21,11 +21,12 @@ def research_assistant(query: str, model: str = None, temperature: float = None,
     # Retrieve papers using English query
     papers = retrieve(english_query, top_k=top_k)
 
-    # Check relevance threshold
-    if not papers or all(p["score"] < 1.0 for p in papers):
+    # Check relevance threshold — cross-encoder scores typically range 0-10
+    if not papers or all(p["score"] < 3.0 for p in papers):
         return {
-            "answer": "No relevant papers found for your query. Try rephrasing or broadening your research direction.",
-            "papers": papers,
+            "answer": "I'm sorry, but I do not have any relevant articles in the current corpus on this topic. "
+                      "This does not imply that none exist. You may try expanding your search or rephrasing your query.",
+            "papers": [],
             "query": query,
             "model": model,
             "time_seconds": round(time.time() - start, 2),
@@ -58,14 +59,9 @@ def research_assistant(query: str, model: str = None, temperature: float = None,
     # Translate answer back to the user's language if needed
     answer = translate_from_english(answer, source_lang)
 
-    # Classify papers by methodology
-    classification = classify_papers(papers, english_query, model=model)
-    classification = translate_from_english(classification, source_lang)
-
     return {
         "answer": answer,
         "papers": papers,
-        "classification": classification,
         "query": query,
         "source_lang": source_lang,
         "model": model,
