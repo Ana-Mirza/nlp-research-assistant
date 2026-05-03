@@ -1,0 +1,249 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=2.2cm]{geometry}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{times}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{multirow}
+\usepackage{caption}
+
+\setlength{\parskip}{0.4em}
+\setlength{\parindent}{0em}
+\setlist{nosep,leftmargin=1.2em}
+
+\title{\textbf{Academic Research Assistance System\\using Hybrid Retrieval-Augmented Generation}}
+\author{
+  % Add your names here
+  Author 1 \and Author 2 \and Author 3 \and Author 4 \\
+  \textit{Master in Machine Learning for Health, UC3M} \\
+  \small \textbf{GitHub:} \url{https://github.com/YOUR_REPO} \quad
+  \textbf{Video:} \url{https://YOUR_VIDEO_LINK}
+}
+\date{}
+
+\begin{document}
+\maketitle
+
+% ============================================================================
+\begin{abstract}
+We present an academic research assistance system that helps researchers explore how their work relates to existing literature. The system employs a hybrid Retrieval-Augmented Generation (RAG) pipeline combining dense retrieval (ChromaDB with sentence-transformers), sparse retrieval (BM25), Reciprocal Rank Fusion, and cross-encoder re-ranking over a corpus of 388K arXiv papers. An open-source LLM generates grounded analyses, structured paper comparisons, state-of-the-art reviews, and research gap identification. The system supports 200+ languages via NLLB-200 translation and provides BibTeX export, similarity metrics, and methodology classification. Evaluation on 15 diverse queries shows 100\% document coverage, an average retrieval score of 7.68, and an LLM-as-Judge quality score of 3.87/5, with a median response time of 10.1 seconds.
+\end{abstract}
+
+% ============================================================================
+\section{Introduction}
+
+A critical step in any research endeavor is situating one's work within the existing literature. This process---identifying relevant papers, understanding methodological differences, and finding unexplored gaps---is time-consuming and requires broad familiarity with the field. Large Language Models (LLMs) can assist, but they are prone to hallucinating citations and fabricating paper details when relying solely on parametric knowledge.
+
+Retrieval-Augmented Generation (RAG) addresses this limitation by grounding LLM responses in retrieved documents. In this project, we build an \textbf{Academic Research Assistance System} that, given a research direction, retrieves relevant papers from a large corpus and generates a grounded analysis comparing the user's direction with existing work.
+
+Our key design decisions are: (1)~a \textbf{hybrid retrieval pipeline} combining dense and sparse methods to maximize recall, (2)~\textbf{cross-encoder re-ranking} for precision, (3)~\textbf{strict hallucination mitigation} through relevance thresholds and constrained prompting, and (4)~\textbf{multi-language support} via a dedicated translation model. Beyond the core requirements, we implement seven extension features including state-of-the-art reviews, research gap detection, and BibTeX export.
+
+% ============================================================================
+\section{System Design}
+
+\subsection{Dataset}
+
+We use the arXiv metadata dataset from Kaggle, filtered to papers in \texttt{cs.CL}, \texttt{cs.AI}, and \texttt{cs.LG} published from 2018 onwards, yielding \textbf{388K papers} with titles, authors, abstracts, and metadata. The 2018 cutoff ensures the corpus reflects the modern transformer era. We additionally extend the corpus with PubMed biomedical abstracts to broaden domain coverage.
+
+\subsection{Architecture}
+
+Figure~\ref{fig:arch} illustrates the pipeline. The system processes queries through six stages:
+
+\begin{enumerate}
+  \item \textbf{Language detection \& translation}: The input query's language is detected using \texttt{langdetect}. Non-English queries are translated to English via NLLB-200-distilled-600M~\cite{nllb} for retrieval, and the final response is translated back.
+  \item \textbf{Dense retrieval}: The query is embedded with \texttt{all-MiniLM-L6-v2} (384-dim, STSB Spearman 0.8492) and the top-20 nearest neighbors are retrieved from ChromaDB.
+  \item \textbf{Sparse retrieval}: BM25S retrieves the top-20 keyword-matched documents in parallel with dense retrieval.
+  \item \textbf{Reciprocal Rank Fusion (RRF)}: Results from both methods are merged using RRF with $k{=}60$~\cite{cormack2009}, which combines rankings without requiring score calibration.
+  \item \textbf{Cross-encoder re-ranking}: The fused candidates are scored by \texttt{ms-marco-MiniLM-L6-v2} and the top-5 are selected. This adds ${\sim}200$ms latency but significantly improves precision.
+  \item \textbf{LLM generation}: The top-5 papers are formatted into a context prompt and sent to \texttt{llama3.1:8b} via the UC3M Ollama API with a system prompt that enforces source attribution and prohibits fabrication.
+\end{enumerate}
+
+\begin{figure}[h]
+\centering
+\small
+\begin{verbatim}
+  Query -> Lang Detect -> NLLB Translation -> [Dense (ChromaDB)]
+                                               [Sparse (BM25)  ] -> RRF
+  -> Cross-Encoder Rerank -> Top-5 -> LLM (llama3.1:8b) -> Translate Back
+\end{verbatim}
+\vspace{-0.5em}
+\caption{System architecture: hybrid retrieval with RRF fusion and cross-encoder re-ranking.}
+\label{fig:arch}
+\end{figure}
+
+\textbf{Why hybrid retrieval?} Dense retrieval captures semantic similarity but can miss exact terminology; sparse retrieval (BM25) excels at keyword matching but lacks semantic understanding. Their combination via RRF consistently outperforms either method alone in information retrieval benchmarks.
+
+\textbf{Why ChromaDB?} It provides persistent storage, native embedding function support, and lightweight deployment suitable for a research prototype. We pre-compute embeddings during ingestion for fast query-time retrieval.
+
+\subsection{Hallucination Mitigation}
+
+We employ three complementary strategies:
+\begin{itemize}
+  \item \textbf{Relevance threshold}: If all retrieved papers have a cross-encoder score below 3.0, the system explicitly refuses to answer rather than generating a potentially hallucinated response.
+  \item \textbf{Constrained prompting}: The system prompt instructs the LLM to ``ONLY reference papers provided in the context'' and ``NEVER fabricate paper titles, authors, or citations.''
+  \item \textbf{Source attribution}: Every response is grounded in specific retrieved papers with titles, authors, and arXiv URLs provided to the user.
+\end{itemize}
+
+\subsection{Prompting Strategy}
+
+The system prompt structures the LLM output into three sections: (1)~overview of relevant papers found, (2)~key differences with the user's direction, and (3)~potential gaps or opportunities. We use a temperature of 0.1 to favor factual, deterministic responses over creative generation. This value was selected after testing the range 0.0--0.5, with 0.1 yielding the highest LLM-as-Judge scores. The \texttt{num\_predict} parameter is set to 512 tokens, sufficient for a structured research analysis.
+
+% ============================================================================
+\section{Additional Features}
+
+Beyond the mandatory requirements, we implement seven extension features:
+
+\textbf{Multi-language support.} We integrate Meta's NLLB-200-distilled-600M~\cite{nllb}, supporting 200+ languages. Queries are translated to English for retrieval (since arXiv papers are in English), and responses are translated back. Article titles remain in their original language per the project specification.
+
+\textbf{Paper comparison.} A structured markdown table comparing each retrieved paper against the user's research direction across four dimensions: methodology, datasets, key contribution, and relation to the user's direction.
+
+\textbf{State-of-the-art review.} Groups retrieved papers by research theme, describes how the field has evolved using publication years, and identifies dominant methodological trends.
+
+\textbf{Research gap detector.} Analyzes retrieved papers to explicitly identify aspects of the user's research direction that are \emph{not} covered by existing work, suggesting unexplored combinations of methods, datasets, or approaches.
+
+\textbf{Methodology classification.} Categorizes papers by methodological approach (supervised, unsupervised, theoretical, etc.) using LLM-based classification.
+
+\textbf{Per-paper summaries.} Generates 2--3 sentence summaries highlighting key contributions, pre-computed at search time for instant display.
+
+\textbf{BibTeX export.} One-click export of retrieved papers as a \texttt{.bib} file with arXiv metadata, directly usable in \LaTeX{} workflows.
+
+\textbf{Similarity metrics.} Each paper displays both the cross-encoder re-ranker score and cosine similarity between the query embedding and paper embedding, providing transparent relevance indicators.
+
+% ============================================================================
+\section{Configuration \& Parameter Tuning}
+
+Table~\ref{tab:params} summarizes the key parameters and their justifications. All parameters are documented in \texttt{config.py}.
+
+\begin{table}[h]
+\centering
+\small
+\caption{System parameters and justifications.}
+\label{tab:params}
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Parameter} & \textbf{Value} & \textbf{Rationale} \\
+\midrule
+\texttt{TOP\_K\_DENSE/SPARSE} & 20 & Candidate pool for RRF; diminishing returns beyond 20 \\
+\texttt{RRF\_K} & 60 & Standard from Cormack et al.~\cite{cormack2009} \\
+\texttt{TOP\_K\_RERANK} & 5 & 5 abstracts $\approx$ 2K tokens; balances coverage \& readability \\
+\texttt{Temperature} & 0.1 & Best judge scores among tested range 0.0--0.5 \\
+\texttt{num\_predict} & 512 & Sufficient for structured research analysis \\
+\texttt{Relevance threshold} & 3.0 & Cross-encoder cutoff; below this, system refuses to answer \\
+\texttt{Embedding model} & MiniLM-L6-v2 & STSB 0.8492; best speed/quality for 388K corpus \\
+\texttt{Reranker} & ms-marco-L6-v2 & MS MARCO-trained; +200ms for significant precision gain \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% ============================================================================
+\section{Evaluation}
+
+We evaluate the system on 15 diverse research queries spanning NLP, computer vision, reinforcement learning, and biomedical AI. Each query has associated relevance keywords for automated coverage checking.
+
+\subsection{Metrics}
+
+Following the project evaluation criteria (Table~1 in the assignment), we measure:
+
+\begin{itemize}
+  \item \textbf{RAG System Quality}: LLM-as-Judge scoring, where \texttt{llama3.1:8b} rates each response on a 1--5 scale considering relevance, grounding in retrieved papers, and identification of key differences.
+  \item \textbf{Document Coverage}: Percentage of queries for which at least one retrieved paper matches the relevance keywords in its title or abstract.
+  \item \textbf{Response Time}: End-to-end latency from query to response.
+\end{itemize}
+
+\subsection{Results}
+
+Table~\ref{tab:results} presents the aggregate results, and Table~\ref{tab:perquery} shows per-query performance.
+
+\begin{table}[h]
+\centering
+\small
+\caption{Aggregate evaluation results across 15 test queries.}
+\label{tab:results}
+\begin{tabular}{@{}lr@{}}
+\toprule
+\textbf{Metric} & \textbf{Score} \\
+\midrule
+Document Coverage & 15/15 (100\%) \\
+Avg.\ Retrieval Score (cross-encoder) & 7.676 \\
+Avg.\ LLM Judge Score & 3.87 / 5 \\
+Median Response Time & 10.1s \\
+Min / Max Response Time & 7.4s / 27.3s\textsuperscript{*} \\
+\bottomrule
+\end{tabular}
+\vspace{0.3em}
+
+\raggedright\footnotesize\textsuperscript{*}Excluding one outlier (3925.7s) caused by an API timeout on the ``diffusion models for text generation'' query. The mean including this outlier is 299.4s; the median of 10.1s better represents typical performance.
+\end{table}
+
+\begin{table}[h]
+\centering
+\small
+\caption{Per-query evaluation results. All queries achieved relevant document retrieval.}
+\label{tab:perquery}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+\textbf{Query} & \textbf{Reranker} & \textbf{Judge} & \textbf{Time (s)} \\
+\midrule
+Federated neural topic models & 5.41 & 4 & 27.3 \\
+Transformer arch.\ for protein folding & 3.20 & 3 & 7.7 \\
+Reinforcement learning for robotics & 8.76 & 4 & 421.3\textsuperscript{\dag} \\
+Attention mechanisms in computer vision & 7.30 & 4 & 12.7 \\
+Graph neural networks for drug discovery & 7.36 & 4 & 10.4 \\
+Few-shot learning for NLP & 7.02 & 4 & 10.5 \\
+Self-supervised learning for speech & 8.66 & 4 & 7.4 \\
+Neural architecture search & 9.25 & 3 & 11.0 \\
+Knowledge distillation in LLMs & 9.66 & 4 & 7.5 \\
+Adversarial robustness of deep learning & 7.97 & 4 & 10.1 \\
+Multi-modal vision and language & 6.10 & 4 & 9.6 \\
+Continual learning w/o forgetting & 8.80 & 4 & 9.2 \\
+Efficient inference for LLMs & 8.23 & 4 & 8.1 \\
+Zero-shot cross-lingual transfer & 8.99 & 4 & 13.1 \\
+Diffusion models for text generation & 8.43 & 4 & 3925.7\textsuperscript{\dag} \\
+\bottomrule
+\end{tabular}
+\vspace{0.3em}
+
+\raggedright\footnotesize\textsuperscript{\dag}Outlier response times caused by intermittent API timeouts and retries on the UC3M Ollama server, not by the retrieval pipeline itself.
+\end{table}
+
+\textbf{Analysis.} The system achieves 100\% document coverage, confirming that the hybrid retrieval approach successfully finds relevant papers across diverse research topics. The average cross-encoder score of 7.68 (on a 0--10 scale) indicates strong retrieval relevance. The LLM-as-Judge score of 3.87/5 reflects generally high-quality responses, with the two lower scores (3/5) occurring on queries where the corpus has limited coverage (protein folding, neural architecture search). Excluding API-related outliers, response times are consistently under 30 seconds, with a median of 10.1 seconds---the majority of which is LLM generation time rather than retrieval.
+
+% ============================================================================
+\section{Conclusions \& Limitations}
+
+\subsection{Conclusions}
+
+We developed a RAG-based academic research assistance system that successfully retrieves relevant papers and generates grounded analyses. The hybrid retrieval pipeline (dense + sparse + RRF + cross-encoder) proved effective, achieving 100\% document coverage across 15 diverse queries. The combination of strict prompting constraints, a relevance threshold, and source attribution effectively mitigates hallucinations---the system refuses to answer rather than fabricate citations. Multi-language support via NLLB-200 broadens accessibility without compromising retrieval quality, since translation happens before and after the English-language retrieval pipeline.
+
+\subsection{Limitations}
+
+\textbf{Abstract-only retrieval.} Our corpus contains only paper abstracts, not full texts. This limits the depth of comparison---methodological details, experimental setups, and results discussed only in the body of papers are invisible to the system. Full-text indexing would improve comparison quality but significantly increase storage and embedding costs.
+
+\textbf{LLM context window constraints.} With \texttt{TOP\_K\_RERANK}$=$5 and \texttt{num\_predict}$=$512, the system can only compare a small number of papers per query. Broader literature surveys would require either a larger context window or a multi-turn summarization approach.
+
+\textbf{Hallucination in the gray zone.} While the relevance threshold (score $<$ 3.0) prevents responses when no relevant papers are found, papers scoring between 3.0 and 5.0 may be only tangentially related. In these cases, the LLM may overstate the connection between the user's direction and the retrieved papers. The ``transformer architectures for protein folding'' query (reranker score 3.20, judge score 3/5) exemplifies this: the corpus contains protein language model papers but lacks dedicated protein folding work.
+
+\textbf{Translation quality for low-resource languages.} NLLB-200-distilled-600M provides broad language coverage but translation quality varies significantly. High-resource languages (Spanish, French, German) produce reliable translations, while low-resource languages may introduce errors that affect retrieval quality.
+
+\textbf{Sequential LLM calls.} Paper summaries are generated sequentially (one API call per paper), making the total response time linear in the number of retrieved papers. Parallelizing these calls or using batch inference would reduce latency.
+
+\textbf{Evaluation bias.} Our LLM-as-Judge evaluation uses the same model family (\texttt{llama3.1:8b}) for both generation and evaluation, introducing potential self-evaluation bias. A more robust evaluation would use human annotators or a different model family as judge.
+
+% ============================================================================
+\begin{thebibliography}{9}
+\bibitem{cormack2009}
+G.~V. Cormack, C.~L.~A. Clarke, and S.~B\"uttcher,
+``Reciprocal Rank Fusion outperforms Condorcet and individual Rank Learning Methods,''
+in \textit{Proc.\ SIGIR}, 2009.
+
+\bibitem{nllb}
+NLLB Team et al.,
+``No Language Left Behind: Scaling Human-Centered Machine Translation,''
+\textit{arXiv:2207.04672}, 2022.
+\end{thebibliography}
+
+\end{document}

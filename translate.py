@@ -12,15 +12,20 @@ MODEL_NAME = "facebook/nllb-200-distilled-600M"
 
 # Maps ISO 639-1 codes (from langdetect) to NLLB BCP-47-style language codes.
 NLLB_LANG_MAP = {
-    "en": "eng_Latn", "es": "spa_Latn", "fr": "fra_Latn", "de": "deu_Latn",
-    "it": "ita_Latn", "pt": "por_Latn", "nl": "nld_Latn", "pl": "pol_Latn",
-    "ru": "rus_Cyrl", "zh": "zho_Hans", "ja": "jpn_Jpan", "ko": "kor_Hang",
-    "ar": "arb_Arab", "hi": "hin_Deva", "tr": "tur_Latn", "vi": "vie_Latn",
-    "th": "tha_Thai", "sv": "swe_Latn", "da": "dan_Latn", "fi": "fin_Latn",
-    "no": "nob_Latn", "cs": "ces_Latn", "ro": "ron_Latn", "hu": "hun_Latn",
-    "uk": "ukr_Cyrl", "ca": "cat_Latn", "hr": "hrv_Latn", "bg": "bul_Cyrl",
-    "sk": "slk_Latn", "el": "ell_Grek", "he": "heb_Hebr", "id": "ind_Latn",
-    "ms": "zsm_Latn", "bn": "ben_Beng", "ta": "tam_Taml", "te": "tel_Telu",
+    "af": "afr_Latn", "ar": "arb_Arab", "bg": "bul_Cyrl", "bn": "ben_Beng",
+    "ca": "cat_Latn", "cs": "ces_Latn", "cy": "cym_Latn", "da": "dan_Latn",
+    "de": "deu_Latn", "el": "ell_Grek", "en": "eng_Latn", "es": "spa_Latn",
+    "et": "est_Latn", "fa": "pes_Arab", "fi": "fin_Latn", "fr": "fra_Latn",
+    "gu": "guj_Gujr", "he": "heb_Hebr", "hi": "hin_Deva", "hr": "hrv_Latn",
+    "hu": "hun_Latn", "id": "ind_Latn", "it": "ita_Latn", "ja": "jpn_Jpan",
+    "kn": "kan_Knda", "ko": "kor_Hang", "lt": "lit_Latn", "lv": "lvs_Latn",
+    "mk": "mkd_Cyrl", "ml": "mal_Mlym", "mr": "mar_Deva", "ne": "npi_Deva",
+    "nl": "nld_Latn", "no": "nob_Latn", "pa": "pan_Guru", "pl": "pol_Latn",
+    "pt": "por_Latn", "ro": "ron_Latn", "ru": "rus_Cyrl", "sk": "slk_Latn",
+    "sl": "slv_Latn", "so": "som_Latn", "sq": "als_Latn", "sv": "swe_Latn",
+    "sw": "swh_Latn", "ta": "tam_Taml", "te": "tel_Telu", "th": "tha_Thai",
+    "tl": "tgl_Latn", "tr": "tur_Latn", "uk": "ukr_Cyrl", "ur": "urd_Arab",
+    "vi": "vie_Latn", "zh-cn": "zho_Hans", "zh-tw": "zho_Hant",
 }
 
 # Lazy-loaded globals
@@ -49,8 +54,8 @@ def _translate(text: str, src_nllb: str, tgt_nllb: str) -> str:
 def detect_language(text: str) -> str:
     """Detect the language of the input text.
 
-    Args:
-        text: Input text to detect.
+    Uses detect_langs for probability-based detection, preferring
+    languages we can actually translate (in NLLB_LANG_MAP).
 
     Returns:
         ISO 639-1 language code (e.g., 'en', 'es', 'fr').
@@ -59,7 +64,13 @@ def detect_language(text: str) -> str:
     if not text or not text.strip():
         return "en"
     try:
-        return detect(text)
+        from langdetect import detect_langs
+        candidates = detect_langs(text)
+        # Prefer a language we support, picking highest probability
+        for c in candidates:
+            if c.lang in NLLB_LANG_MAP:
+                return c.lang
+        return candidates[0].lang if candidates else "en"
     except LangDetectException:
         return "en"
 
