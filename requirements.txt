@@ -5,4 +5,5 @@ bm25s==0.2.12
 requests==2.32.3
 datasets==3.6.0
 transformers==4.51.3
+langid==1.1.6
 langdetect==1.0.9

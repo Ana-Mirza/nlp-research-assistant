@@ -1,11 +1,10 @@
 """Ingest filtered arXiv papers into ChromaDB (parallel) and build BM25 index."""
 
-import pickle
 import os
 import time
+import pickle
 import numpy as np
 import pandas as pd
-from rank_bm25 import BM25Okapi
 
 from config import EMBEDDING_MODEL, CHROMA_DB_PATH, COLLECTION_NAME, DATA_DIR
 
@@ -109,27 +108,30 @@ def ingest_chromadb(parquet_path):
 
 
 def build_bm25_index(parquet_path):
-    bm25_path = os.path.join(DATA_DIR, "bm25_index.pkl")
+    import bm25s
+    bm25s_path = os.path.join(DATA_DIR, "bm25s_index")
     mapping_path = os.path.join(DATA_DIR, "bm25_mapping.pkl")
 
-    if os.path.exists(bm25_path) and os.path.exists(mapping_path):
+    if os.path.exists(bm25s_path) and os.path.exists(mapping_path):
         print("BM25 index already exists. Skipping.")
         return
 
-    print("Building BM25 index...")
+    print("Building BM25s index...")
     df = pd.read_parquet(parquet_path, columns=["id", "abstract"])
 
-    tokenized_corpus = [str(abstract).lower().split() for abstract in df["abstract"]]
+    corpus = [str(abstract).lower() for abstract in df["abstract"]]
+    print(f"  Tokenizing {len(corpus):,} documents...")
+    corpus_tokens = bm25s.tokenize(corpus, show_progress=True)
+
+    bm25 = bm25s.BM25()
+    bm25.index(corpus_tokens, show_progress=True)
+    bm25.save(bm25s_path)
+
     id_mapping = {i: str(aid) for i, aid in enumerate(df["id"])}
-
-    print(f"  Tokenized {len(tokenized_corpus):,} documents.")
-    bm25 = BM25Okapi(tokenized_corpus)
-
-    with open(bm25_path, "wb") as f:
-        pickle.dump(bm25, f)
     with open(mapping_path, "wb") as f:
         pickle.dump(id_mapping, f)
-    print(f"BM25 index saved.")
+
+    print(f"BM25s index saved ({len(corpus):,} documents).")
 
 
 def main():
@@ -137,9 +139,12 @@ def main():
     print(f"Using: {parquet_path}")
     ingest_chromadb(parquet_path)
     # Delete old BM25 to rebuild with new data
-    for f in ["bm25_index.pkl", "bm25_mapping.pkl"]:
+    import shutil
+    for f in ["bm25s_index", "bm25_mapping.pkl", "bm25_index.pkl"]:
         p = os.path.join(DATA_DIR, f)
-        if os.path.exists(p):
+        if os.path.isdir(p):
+            shutil.rmtree(p)
+        elif os.path.exists(p):
             os.remove(p)
     build_bm25_index(parquet_path)
     print("Ingestion complete.")

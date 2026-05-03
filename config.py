@@ -61,6 +61,16 @@ RRF_K = 60
 DEFAULT_TEMPERATURE = 0.1
 
 # ============================================================================
+# Language Detection
+# ============================================================================
+# LANG_DETECT_MIN_CONFIDENCE = 0.70: Minimum normalized probability from
+# langid for a non-English detection to be trusted. Short research queries
+# (e.g., "GANs for images", "LLM RAG") are easy to misclassify. When the
+# detector is unsure, we default to English because the corpus is English
+# and unnecessary round-trip translation degrades retrieval quality.
+LANG_DETECT_MIN_CONFIDENCE = 0.70
+
+# ============================================================================
 # Dataset Configuration
 # ============================================================================
 # Focus on NLP/AI/ML papers (cs.CL, cs.AI, cs.LG) from 2018 onwards to ensure

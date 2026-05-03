@@ -1,152 +1,121 @@
 # Academic Research Assistance System
 
-## Overview
+A RAG-based system that retrieves relevant academic papers and generates grounded analyses comparing existing work with your research direction. Built with a hybrid retrieval pipeline over **888K papers** from arXiv (CS/AI/ML) and PubMed (biomedical sciences).
 
-RAG-based system that helps researchers find relevant papers, compare them with their research direction, identify gaps, and generate structured state-of-the-art reviews.
+**GitHub:** [REPO_URL]  
+**Demo Video:** [VIDEO_URL]
 
-**NLP Final Project** — Master in Machine Learning for Health, UC3M (2025/2026).
+## Quick Start
+
+```bash
+# 1. Install dependencies
+pip install -r requirements.txt
+
+# 2. Download data and build indexes (~1 hour, one-time)
+KMP_DUPLICATE_LIB_OK=TRUE python setup.py
+
+# 3. Run the app
+KMP_DUPLICATE_LIB_OK=TRUE streamlit run app.py
+```
+
+> **Note:** If you have the pre-built `data/` and `chroma_db/` folders (e.g., from a shared drive), place them in the project root and skip step 2.
 
 ## Architecture
 
 ```
-User Query → Language Detection → Translation (NLLB-200) → Hybrid Retrieval → RRF Fusion → Cross-Encoder Re-ranking → LLM Generation → Translation Back → Response
+User Query → Language Detection (langid) → NLLB Translation → English Query
+  ├── Dense Retrieval (ChromaDB, all-MiniLM-L6-v2) → Top 20
+  └── Sparse Retrieval (BM25s) → Top 20                        [parallel]
+      └── Reciprocal Rank Fusion (k=60) → Merged candidates
+          └── Cross-Encoder Re-ranking (ms-marco-MiniLM-L6-v2) → Top 5
+              └── LLM Generation (llama3.1:8b via UC3M API) → Response
 ```
 
-| Component | Description |
-|-----------|-------------|
-| **Hybrid Retrieval** | Dense (ChromaDB + all-MiniLM-L6-v2) + Sparse (BM25S) |
-| **Fusion** | Reciprocal Rank Fusion (k=60) |
-| **Re-ranking** | cross-encoder/ms-marco-MiniLM-L6-v2 |
-| **Generation** | UC3M Ollama API (llama3.1:8b, qwen3:8b, gemma3:4b) |
-| **Translation** | facebook/nllb-200-distilled-600M (200+ languages) |
-| **Frontend** | Streamlit |
+## Dataset
+
+| Source | Papers | Categories | Years | Description |
+|--------|--------|-----------|-------|-------------|
+| arXiv | 388K | cs.CL, cs.AI, cs.LG | 2018+ | NLP, AI, and ML papers |
+| PubMed | 500K | All fields | All | Biomedical and scientific papers |
+| **Total** | **888K** | | | |
+
+- arXiv data from [librarian-bots/arxiv-metadata-snapshot](https://huggingface.co/datasets/librarian-bots/arxiv-metadata-snapshot) on HuggingFace
+- PubMed data from [brainchalov/pubmed_arxiv_abstracts_data](https://huggingface.co/datasets/brainchalov/pubmed_arxiv_abstracts_data) on HuggingFace
 
 ## Features
 
 ### Core (Mandatory)
+- **Hybrid retrieval**: Dense (ChromaDB) + Sparse (BM25s) + RRF fusion + cross-encoder re-ranking
+- **Grounded analysis**: LLM generates structured comparison with retrieved papers only
+- **Hallucination mitigation**: Relevance threshold (score < 3.0 filtered), constrained prompting, source attribution
+- **Multi-language**: Queries in 55+ languages via NLLB-200 translation for retrieval; LLM responds in the user's language
+- **Streamlit frontend**: Interactive UI with settings sidebar, paper expanders, relevance indicators
 
-- Research direction analysis with retrieved papers
-- Paper comparison (key differences table)
-- No hallucination — refuses to answer when no relevant papers are found
-- Multi-language support (query and response in user's language)
-
-### Extensions
-
-- State-of-the-art classification (thematic grouping + field evolution)
-- Research gap detector (identifies unexplored areas)
-- Paper methodology classification
-- Per-paper auto-summaries
-- BibTeX export for retrieved papers
-- Similarity metrics with visual indicators (cosine similarity + cross-encoder scores)
-- Multi-language translation (200+ languages via NLLB-200)
-
-## Dataset
-
-- **arXiv**: 388K papers from cs.CL, cs.AI, cs.LG (2018–present)
-- **PubMed**: Extended with biomedical abstracts via `add_pubmed.py`
-
-## Evaluation Results
-
-| Metric | Score |
-|--------|-------|
-| Document Coverage | 100% (15/15 queries) |
-| Avg Retrieval Score | 7.676 |
-| Avg LLM Judge Score | 3.87/5 |
-
-## Performance & Cold Start
-
-On first launch, the app preloads all retrieval models into memory using `@st.cache_resource`:
-
-| Component | Loaded At | Approx. Time |
-|-----------|-----------|---------------|
-| ChromaDB collection | Startup | ~2s |
-| BM25 index | Startup | ~1s |
-| Cross-encoder reranker | Startup | ~3s |
-| SentenceTransformer embedder | Startup | ~2s |
-| NLLB translation model | First non-English query | ~5s |
-
-After the cold start, retrieval is fast (<1s). The main latency bottleneck is the **LLM API** — each call to UC3M Ollama takes 3–10s depending on response length. A typical search makes 6 LLM calls (1 analysis + 5 paper summaries).
-
-## Setup
-
-```bash
-pip install -r requirements.txt
-```
-
-Set the API key (optional, has default):
-
-```bash
-export UC3M_API_KEY="your-key-here"
-```
-
-### Data Preparation
-
-```bash
-python download_data.py   # Download arXiv metadata
-python ingest.py           # Build ChromaDB + BM25 indices
-python add_pubmed.py       # (Optional) Add PubMed papers
-```
-
-### Run
-
-```bash
-streamlit run app.py
-```
-
-On **macOS**, if you get an `OMP: Error #15` (duplicate libiomp5), prefix with:
-
-```bash
-KMP_DUPLICATE_LIB_OK=TRUE streamlit run app.py
-```
-
-This is a known macOS issue when PyTorch and NumPy both link against OpenMP. It is not needed on Linux.
-
-### Evaluate
-
-```bash
-python evaluate.py
-```
+### Additional (Grade > 8)
+- **Paper comparison table**: Side-by-side comparison across methodology, datasets, contributions
+- **State-of-the-art review**: Groups papers by theme and traces field evolution
+- **Research gap detection**: Identifies unexplored areas based on retrieved literature
+- **Methodology classification**: Categorizes papers by approach (supervised, unsupervised, etc.)
+- **Per-paper summaries**: On-demand LLM summaries, progressively loaded without blocking UI
+- **Similarity metrics**: Cosine similarity + cross-encoder scores with color-coded relevance (🟢 High / 🟠 Medium / 🔵 Low)
+- **BibTeX export**: One-click export of retrieved papers for LaTeX workflows
 
 ## Project Structure
 
+| File | Purpose |
+|------|---------|
+| `config.py` | All configuration constants with documented justifications |
+| `download_data.py` | Downloads arXiv dataset, filters by category (cs.CL/AI/LG) and year (2018+) |
+| `add_pubmed.py` | Downloads PubMed dataset, embeds, and adds to existing indexes |
+| `ingest.py` | Embeds papers with sentence-transformers, builds ChromaDB + BM25s indexes |
+| `retrieval.py` | Hybrid retrieval: parallel dense + BM25s, RRF fusion, cross-encoder re-ranking |
+| `llm.py` | UC3M Ollama API integration (llama3.1:8b, qwen3:8b, gemma3:4b) |
+| `translate.py` | Language detection (langid + langdetect fallback) and NLLB-200 translation |
+| `rag.py` | Full RAG pipeline, prompt engineering, and additional feature functions |
+| `app.py` | Streamlit frontend with progressive summary loading |
+| `evaluate.py` | Evaluation: Precision@K, MRR, NDCG@K, citation faithfulness, cross-family LLM-as-Judge |
+| `setup.py` | One-command setup: download, embed, index |
+| `paper.tex` | 4-page academic report |
+
+## Evaluation
+
+Evaluated on 15 diverse research queries. Generator: `llama3.1:8b`, Judge: `qwen3:8b` (cross-family to avoid self-evaluation bias).
+
+**Retrieval metrics:** Precision@5, MRR, NDCG@5, Document Coverage  
+**Generation metrics:** Citation faithfulness (programmatic), LLM-as-Judge (1-5 scale)  
+**Efficiency:** Response time (mean, median, min, max)
+
+Run evaluation:
+```bash
+KMP_DUPLICATE_LIB_OK=TRUE python evaluate.py
 ```
-research_assistant/
-├── app.py              # Streamlit frontend
-├── rag.py              # RAG pipeline (research_assistant, compare, classify, gaps, SOTA, BibTeX)
-├── retrieval.py        # Hybrid retrieval: dense + sparse + RRF + cross-encoder
-├── llm.py              # UC3M Ollama API integration
-├── translate.py        # Multi-language translation (NLLB-200)
-├── config.py           # Configuration with parameter justifications
-├── evaluate.py         # Evaluation suite (coverage, retrieval, LLM-as-Judge)
-├── download_data.py    # arXiv dataset download
-├── ingest.py           # Embedding + indexing pipeline
-├── add_pubmed.py       # PubMed dataset extension
-├── requirements.txt    # Python dependencies
-└── data/               # Datasets and indices
-```
 
-## Technologies
+Results saved to `data/evaluation_results.json`.
 
-| Component | Technology |
-|-----------|------------|
-| Vector DB | ChromaDB |
-| Embeddings | all-MiniLM-L6-v2 (sentence-transformers) |
-| Sparse Retrieval | BM25S |
-| Re-ranking | cross-encoder/ms-marco-MiniLM-L6-v2 |
-| LLM | llama3.1:8b / qwen3:8b / gemma3:4b (UC3M Ollama) |
-| Translation | facebook/nllb-200-distilled-600M |
-| Frontend | Streamlit |
+## Configuration
 
-## Parameter Justification
-
-All retrieval and generation parameters are documented in `config.py`. Key choices:
+All parameters are in `config.py` with documented justifications. Key parameters:
 
 | Parameter | Value | Rationale |
 |-----------|-------|-----------|
-| `TOP_K_DENSE` / `TOP_K_SPARSE` | 20 | Sufficiently large candidate pool for RRF fusion; increasing beyond 20 showed diminishing returns |
-| `TOP_K_RERANK` | 5 | Balances comprehensiveness with readability; 5 abstracts ≈ 2000 tokens for the LLM context |
-| `RRF_K` | 60 | Standard smoothing constant from Cormack et al. (2009); prevents top-ranked docs from dominating |
-| `DEFAULT_TEMPERATURE` | 0.1 | Low temperature for factual, grounded responses; best LLM-as-Judge scores (3.87/5) among tested values 0.0–0.5 |
-| `EMBEDDING_MODEL` | all-MiniLM-L6-v2 | STSB Spearman 0.8492; best speed/quality tradeoff for 388K corpus |
-| `RERANKER_MODEL` | ms-marco-MiniLM-L6-v2 | Trained on MS MARCO passage ranking; adds ~200ms latency but significantly improves precision |
-| `MIN_YEAR` | 2018 | Post-transformer era; papers before 2018 predate the architecture and are less relevant |
+| Embedding model | all-MiniLM-L6-v2 | Best speed/quality tradeoff for 888K corpus |
+| Re-ranker | ms-marco-MiniLM-L6-v2 | MS MARCO-trained, +200ms for significant precision gain |
+| Top-K dense/sparse | 20 | Sufficient candidate pool; diminishing returns beyond 20 |
+| Top-K rerank | 5 | 5 abstracts ≈ 2K tokens; balances coverage and readability |
+| RRF k | 60 | Standard from Cormack et al. (2009) |
+| Temperature | 0.1 | Low for factual responses; best LLM-as-Judge scores |
+| Relevance threshold | 3.0 | Papers below this are filtered; system refuses to answer if none pass |
+
+## Requirements
+
+- Python 3.10+
+- ~14GB disk space (data + indexes)
+- macOS with Apple Silicon recommended (MPS acceleration for embedding)
+- Access to UC3M LLM API (yiyuan.tsc.uc3m.es)
+
+## Dependencies
+
+```
+streamlit, chromadb, sentence-transformers, bm25s, requests,
+datasets, transformers, langid, langdetect
+```

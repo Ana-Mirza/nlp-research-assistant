@@ -141,6 +141,13 @@ def retrieve(query: str, top_k: int = 5) -> list[dict]:
 
     results = []
     for (aid, abstract, meta, doc), score in ranked:
+        # Build appropriate URL based on source
+        if aid.startswith("pubmed_"):
+            paper_url = f"https://scholar.google.com/scholar?q={meta.get('title', '').replace(' ', '+')}"
+            source = "pubmed"
+        else:
+            paper_url = f"https://arxiv.org/abs/{aid}"
+            source = "arxiv"
         results.append({
             "id": aid,
             "title": meta.get("title", ""),
@@ -149,7 +156,8 @@ def retrieve(query: str, top_k: int = 5) -> list[dict]:
             "year": meta.get("year", ""),
             "abstract": abstract,
             "score": float(score),
-            "arxiv_url": f"https://arxiv.org/abs/{aid}",
+            "url": paper_url,
+            "source": source,
         })
     return results
 

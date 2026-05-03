@@ -30,7 +30,7 @@
 
 % ============================================================================
 \begin{abstract}
-We present an academic research assistance system that helps researchers explore how their work relates to existing literature. The system employs a hybrid Retrieval-Augmented Generation (RAG) pipeline combining dense retrieval (ChromaDB with sentence-transformers), sparse retrieval (BM25), Reciprocal Rank Fusion, and cross-encoder re-ranking over a corpus of 388K arXiv papers. An open-source LLM generates grounded analyses, structured paper comparisons, state-of-the-art reviews, and research gap identification. The system supports 200+ languages via NLLB-200 translation and provides BibTeX export, similarity metrics, and methodology classification. Evaluation on 15 diverse queries shows 100\% document coverage, an average retrieval score of 7.68, and an LLM-as-Judge quality score of 3.87/5, with a median response time of 10.1 seconds.
+We present an academic research assistance system that helps researchers explore how their work relates to existing literature. The system employs a hybrid Retrieval-Augmented Generation (RAG) pipeline combining dense retrieval (ChromaDB with sentence-transformers), sparse retrieval (BM25), Reciprocal Rank Fusion, and cross-encoder re-ranking over a corpus of 888K papers (388K from arXiv and 500K from PubMed). An open-source LLM generates grounded analyses, structured paper comparisons, state-of-the-art reviews, and research gap identification. The system supports 200+ languages via NLLB-200 translation and provides BibTeX export, similarity metrics, and methodology classification. Evaluation on 15 diverse queries shows 100\% document coverage, an average retrieval score of 7.68, and an LLM-as-Judge quality score of 3.87/5, with a median response time of 10.1 seconds.
 \end{abstract}
 
 % ============================================================================
@@ -47,14 +47,18 @@ Our key design decisions are: (1)~a \textbf{hybrid retrieval pipeline} combining
 
 \subsection{Dataset}
 
-We use the arXiv metadata dataset from Kaggle, filtered to papers in \texttt{cs.CL}, \texttt{cs.AI}, and \texttt{cs.LG} published from 2018 onwards, yielding \textbf{388K papers} with titles, authors, abstracts, and metadata. The 2018 cutoff ensures the corpus reflects the modern transformer era. We additionally extend the corpus with PubMed biomedical abstracts to broaden domain coverage.
+We combine two complementary data sources to build a corpus of \textbf{888K papers}:
+
+\textbf{arXiv} (388K papers). We use the arXiv metadata snapshot from HuggingFace, filtered to papers in \texttt{cs.CL}, \texttt{cs.AI}, and \texttt{cs.LG} published from 2018 onwards. The 2018 cutoff ensures the corpus reflects the modern transformer era. Each paper includes title, authors, abstract, and category metadata.
+
+\textbf{PubMed} (500K papers). We extend the corpus with biomedical abstracts from the \texttt{brainchalov/pubmed\_arxiv\_abstracts\_data} dataset on HuggingFace, which includes papers across multiple scientific fields with titles, abstracts, journal names, and field labels. Papers with abstracts shorter than 100 characters were removed. Unlike the arXiv subset, PubMed papers were \emph{not} filtered by category, intentionally preserving broad interdisciplinary coverage to support cross-domain queries (e.g., machine learning applied to biology or medicine). This design choice introduces some noise from unrelated fields, which we discuss in Section~6.2.
 
 \subsection{Architecture}
 
 Figure~\ref{fig:arch} illustrates the pipeline. The system processes queries through six stages:
 
 \begin{enumerate}
-  \item \textbf{Language detection \& translation}: The input query's language is detected using \texttt{langdetect}. Non-English queries are translated to English via NLLB-200-distilled-600M~\cite{nllb} for retrieval, and the final response is translated back.
+  \item \textbf{Language detection \& translation}: The input query's language is detected using \texttt{langid}. Non-English queries are translated to English via NLLB-200-distilled-600M~\cite{nllb} for retrieval, and the final response is translated back.
   \item \textbf{Dense retrieval}: The query is embedded with \texttt{all-MiniLM-L6-v2} (384-dim, STSB Spearman 0.8492) and the top-20 nearest neighbors are retrieved from ChromaDB.
   \item \textbf{Sparse retrieval}: BM25S retrieves the top-20 keyword-matched documents in parallel with dense retrieval.
   \item \textbf{Reciprocal Rank Fusion (RRF)}: Results from both methods are merged using RRF with $k{=}60$~\cite{cormack2009}, which combines rankings without requiring score calibration.
@@ -146,13 +150,23 @@ We evaluate the system on 15 diverse research queries spanning NLP, computer vis
 
 \subsection{Metrics}
 
-Following the project evaluation criteria (Table~1 in the assignment), we measure:
+Following the project evaluation criteria (Table~1 in the assignment) and the retrieval/generation metrics from the course (slides 29--30), we measure:
 
+\textbf{Retrieval metrics.}
 \begin{itemize}
-  \item \textbf{RAG System Quality}: LLM-as-Judge scoring, where \texttt{llama3.1:8b} rates each response on a 1--5 scale considering relevance, grounding in retrieved papers, and identification of key differences.
-  \item \textbf{Document Coverage}: Percentage of queries for which at least one retrieved paper matches the relevance keywords in its title or abstract.
-  \item \textbf{Response Time}: End-to-end latency from query to response.
+  \item \textbf{Precision@5}: Fraction of top-5 retrieved papers with cross-encoder score $>5.0$. We use the re-ranker score as a relevance proxy since it is trained on MS~MARCO for query-document relevance prediction, avoiding the need for manual annotations.
+  \item \textbf{MRR} (Mean Reciprocal Rank): $1/\text{rank}$ of the first paper with score $>7.0$. Measures whether the most relevant result appears near the top.
+  \item \textbf{NDCG@5}: Normalized Discounted Cumulative Gain using cross-encoder scores as graded relevance (normalized to $[0,1]$). Accounts for ranking quality---a relevant paper at rank~1 is worth more than at rank~5.
+  \item \textbf{Document Coverage}: Percentage of queries for which at least one retrieved paper matches topic keywords in its title or abstract.
 \end{itemize}
+
+\textbf{Generation metrics.}
+\begin{itemize}
+  \item \textbf{Citation Faithfulness}: Programmatic check that paper titles quoted in the LLM answer exist in the retrieved set. Approximates RAGAS faithfulness by verifying citation grounding without requiring ground-truth annotations.
+  \item \textbf{Cross-family LLM-as-Judge}: \texttt{qwen3:8b} rates responses generated by \texttt{llama3.1:8b} on a 1--5 scale, considering relevance, grounding, and identification of key differences. The score is generated \emph{before} any justification to avoid the score-then-justify antipattern~(Turpin et al., 2023).
+\end{itemize}
+
+\textbf{Efficiency.} End-to-end response time (retrieval + generation), reporting both mean and median to handle API latency outliers.
 
 \subsection{Results}
 
@@ -163,20 +177,22 @@ Table~\ref{tab:results} presents the aggregate results, and Table~\ref{tab:perqu
 \small
 \caption{Aggregate evaluation results across 15 test queries.}
 \label{tab:results}
-\begin{tabular}{@{}lr@{}}
+\begin{tabular}{@{}llr@{}}
 \toprule
-\textbf{Metric} & \textbf{Score} \\
+\textbf{Category} & \textbf{Metric} & \textbf{Score} \\
 \midrule
-Document Coverage & 15/15 (100\%) \\
-Avg.\ Retrieval Score (cross-encoder) & 7.676 \\
-Avg.\ LLM Judge Score & 3.87 / 5 \\
-Median Response Time & 10.1s \\
-Min / Max Response Time & 7.4s / 27.3s\textsuperscript{*} \\
+\multirow{4}{*}{Retrieval} & Document Coverage & 15/15 (100\%) \\
+ & Precision@5 & TBD \\
+ & MRR & TBD \\
+ & NDCG@5 & TBD \\
+\midrule
+\multirow{2}{*}{Generation} & Citation Faithfulness & TBD \\
+ & LLM Judge (qwen3:8b) & TBD / 5 \\
+\midrule
+\multirow{2}{*}{Efficiency} & Median Response Time & TBD \\
+ & Min / Max Response Time & TBD \\
 \bottomrule
 \end{tabular}
-\vspace{0.3em}
-
-\raggedright\footnotesize\textsuperscript{*}Excluding one outlier (3925.7s) caused by an API timeout on the ``diffusion models for text generation'' query. The mean including this outlier is 299.4s; the median of 10.1s better represents typical performance.
 \end{table}
 
 \begin{table}[h]
@@ -231,7 +247,11 @@ We developed a RAG-based academic research assistance system that successfully r
 
 \textbf{Sequential LLM calls.} Paper summaries are generated sequentially (one API call per paper), making the total response time linear in the number of retrieved papers. Parallelizing these calls or using batch inference would reduce latency.
 
-\textbf{Evaluation bias.} Our LLM-as-Judge evaluation uses the same model family (\texttt{llama3.1:8b}) for both generation and evaluation, introducing potential self-evaluation bias. A more robust evaluation would use human annotators or a different model family as judge.
+\textbf{Evaluation bias.} Our LLM-as-Judge evaluation uses a different model family (\texttt{qwen3:8b}) from the generator (\texttt{llama3.1:8b}) to mitigate self-evaluation bias. However, both models share similar training paradigms, so some residual bias may remain. A more robust evaluation would additionally include human annotators.
+
+\textbf{Hallucination detection gap.} While citation faithfulness checks whether quoted paper titles exist in the retrieved set, neither this metric nor the LLM-as-Judge can detect \emph{semantic} hallucinations---cases where the system attributes incorrect claims to real papers (e.g., misrepresenting a paper's methodology or findings). Detecting such hallucinations would require human evaluation or a dedicated fact-verification pipeline that cross-references generated claims against paper abstracts at the sentence level.
+
+\textbf{PubMed corpus noise.} While arXiv papers were filtered to CS/AI/ML categories, PubMed papers were included without category filtering. This broad inclusion supports interdisciplinary queries but introduces noise from unrelated fields (e.g., ecology, chemistry). Category-aware filtering on the PubMed \texttt{field} metadata or deduplication between the arXiv and PubMed subsets would improve retrieval precision. Additionally, PubMed papers lack year metadata, preventing temporal filtering or year-based analysis.
 
 % ============================================================================
 \begin{thebibliography}{9}

@@ -5,12 +5,14 @@
 # between translation quality and resource usage, making it practical for
 # CPU-only inference in research pipelines.
 
-from langdetect import detect, LangDetectException
+from langid.langid import LanguageIdentifier, model as langid_model
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+
+from config import LANG_DETECT_MIN_CONFIDENCE
 
 MODEL_NAME = "facebook/nllb-200-distilled-600M"
 
-# Maps ISO 639-1 codes (from langdetect) to NLLB BCP-47-style language codes.
+# Maps ISO 639-1 codes (from langid) to NLLB BCP-47-style language codes.
 NLLB_LANG_MAP = {
     "af": "afr_Latn", "ar": "arb_Arab", "bg": "bul_Cyrl", "bn": "ben_Beng",
     "ca": "cat_Latn", "cs": "ces_Latn", "cy": "cym_Latn", "da": "dan_Latn",
@@ -31,6 +33,15 @@ NLLB_LANG_MAP = {
 # Lazy-loaded globals
 _tokenizer = None
 _model = None
+_lang_identifier = None
+
+
+def _get_lang_identifier():
+    """Lazy-load a langid identifier configured to return normalized probabilities in [0, 1]."""
+    global _lang_identifier
+    if _lang_identifier is None:
+        _lang_identifier = LanguageIdentifier.from_modelstring(langid_model, norm_probs=True)
+    return _lang_identifier
 
 
 def _load_model():
@@ -52,26 +63,39 @@ def _translate(text: str, src_nllb: str, tgt_nllb: str) -> str:
 
 
 def detect_language(text: str) -> str:
-    """Detect the language of the input text.
+    """Detect the language of the input text using langid.
 
-    Uses detect_langs for probability-based detection, preferring
-    languages we can actually translate (in NLLB_LANG_MAP).
+    Uses normalized probabilities in [0, 1]. Falls back to 'en' when the
+    detector's confidence is below LANG_DETECT_MIN_CONFIDENCE — short or
+    ambiguous queries can misclassify, and defaulting to English is the
+    safest behavior since the corpus is English.
 
     Returns:
         ISO 639-1 language code (e.g., 'en', 'es', 'fr').
-        Falls back to 'en' if detection fails or text is empty.
+        Falls back to 'en' if text is empty, detection fails, or confidence
+        is below the configured threshold.
     """
     if not text or not text.strip():
         return "en"
     try:
-        from langdetect import detect_langs
-        candidates = detect_langs(text)
-        # Prefer a language we support, picking highest probability
-        for c in candidates:
-            if c.lang in NLLB_LANG_MAP:
-                return c.lang
-        return candidates[0].lang if candidates else "en"
-    except LangDetectException:
+        identifier = _get_lang_identifier()
+        lang, prob = identifier.classify(text)
+        if prob < LANG_DETECT_MIN_CONFIDENCE:
+            return "en"
+        # langid struggles with short Romance language texts (ro/fr/it/es confusion).
+        # Fall back to langdetect for short texts or ambiguous Romance languages.
+        ambiguous_romance = {"fr", "it", "ro", "es", "pt", "ca"}
+        if len(text.split()) < 10 and lang in ambiguous_romance:
+            try:
+                from langdetect import detect_langs
+                candidates = detect_langs(text)
+                for c in candidates:
+                    if c.lang in NLLB_LANG_MAP:
+                        return c.lang
+            except Exception:
+                pass
+        return lang
+    except Exception:
         return "en"
 
 

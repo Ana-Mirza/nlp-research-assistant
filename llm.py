@@ -20,7 +20,7 @@ def generate(prompt: str, system_prompt: str = '', model: str = None, temperatur
         "prompt": full_prompt,
         "stream": False,
         "temperature": temperature,
-        "options": {"num_predict": 512},
+        "options": {},
     }
 
     try:
